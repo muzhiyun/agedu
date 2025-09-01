@@ -536,7 +536,7 @@ int main(int argc, char **argv)
     bool mtime = false;
     bool logicalsize = false;
     bool closeoneof = true;
-    bool showfiles = false;
+    bool showfiles = true;
 
 #ifdef DEBUG_MAD_OPTION_PARSING_MACROS
     {

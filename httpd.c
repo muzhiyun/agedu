@@ -280,7 +280,7 @@ char *got_data(struct connctx *ctx, char *data, int length,
                      */
                     document = html_query(ctx->t, index, cfg, true);
                     if (document) {
-                        ret = http_success("text/html", true, document);
+                        ret = http_success("text/html; charset=UTF-8", true, document);
                         sfree(document);
                     } else {
                         ret = http_error("404", "Not Found", NULL,

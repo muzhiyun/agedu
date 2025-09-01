@@ -880,7 +880,7 @@ static void write_report_line(struct html *ctx, struct vector *vec)
 	}
 	if (vec->literal)
 	    htprintf(ctx, "<code>");
-	htescape(ctx, vec->name, strlen(vec->name), 1);
+	htprintf(ctx, vec->name);
 	if (vec->literal)
 	    htprintf(ctx, "</code>");
 	if (doing_href)
