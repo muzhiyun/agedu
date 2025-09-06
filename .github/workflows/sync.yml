@@ -1,0 +1,55 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch: 
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://git.tartarus.org/simon/agedu.git || true
+          git config user.name "GitHub Actions"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Fetch upstream changes and tags
+        run: |
+          git fetch upstream
+          git fetch upstream --tags
+
+      - name: Check if there are new changes
+        id: check_changes
+        run: |
+          if git diff --quiet HEAD upstream/main; then
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No new changes detected"
+          else
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "New changes detected"
+          fi
+
+      - name: Merge upstream changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git merge upstream/main --no-edit --allow-unrelated-histories || \
+          (echo "Merge conflict occurred, attempting theirs strategy" && \
+           git merge -Xtheirs upstream/main --allow-unrelated-histories)
+
+
+      - name: Push changes to origin
+        if: steps.check_changes.outputs.has_changes == 'true' || steps.check_tags.outputs.has_new_tags == 'true'
+        run: |
+          if [ "${{ steps.check_changes.outputs.has_changes }}" = "true" ]; then
+            git push origin HEAD:main
+          fi

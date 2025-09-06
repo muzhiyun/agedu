@@ -1,0 +1,142 @@
+name: Build agedu for x86_64 and aarch64 linux
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch: 
+
+env:
+  # AGEDU_VERSION: ${{ github.run_number }}.${{ github.sha }}
+  AGEDU_VERSION: ${{ github.sha }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - platform: "x86_64-linux"
+            cc: "gcc"
+            cxx: "g++"
+            build_type: "Release"
+          - platform: "aarch64-linux"
+            cc: "aarch64-linux-gnu-gcc"
+            cxx: "aarch64-linux-gnu-g++"
+            build_type: "Release"
+            cross_compile: "-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64"
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake perl
+        if [ "${{ matrix.platform }}" = "aarch64-linux" ]; then
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+        fi
+
+    - name: Generate version information
+      run: |
+
+        mkdir -p agedu
+        perl -e 'print "#define AGEDU_VERSION \"$ENV{AGEDU_VERSION}\"\n"' > agedu/version.h
+        perl -e 'print "\n\\versionid agedu version $ENV{AGEDU_VERSION}\n"' >> agedu/agedu.but
+
+    - name: Create build directory
+      run: mkdir -p build-${{ matrix.platform }}
+
+    - name: List directory structure
+      run: |
+        echo "Listing workspace directory:"
+        ls -la ${{ github.workspace }}
+        echo "Listing agedu subdirectory (if exists):"
+        ls -la ${{ github.workspace }}/agedu || echo "agedu subdirectory does not exist"
+
+    - name: Configure with CMake
+      run: |
+        cd build-${{ matrix.platform }}
+        cmake ${{ github.workspace }} \
+          -DCMAKE_C_COMPILER=${{ matrix.cc }} \
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} \
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          ${{ matrix.cross_compile }} \
+          -DCMAKE_EXE_LINKER_FLAGS="-static" \
+          -DCMAKE_CXX_FLAGS="-static"     
+
+    - name: Build with Make
+      run: |
+        cd build-${{ matrix.platform }}
+        make -j$(nproc) VERBOSE=1
+
+    - name: Collect binary
+      run: |
+        mkdir -p artifacts
+        find build-${{ matrix.platform }} -name "agedu" -type f -executable -exec cp {} artifacts/agedu-${{ matrix.platform }}.bin \;
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: agedu-${{ matrix.platform }}.bin
+        path: artifacts/agedu-${{ matrix.platform }}.bin
+
+  create-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: github.event_name == 'push'
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: List directory structure
+      run: |
+        echo "Listing workspace directory:"
+        ls -la ${{ github.workspace }}
+        echo "Listing agedu subdirectory (if exists):"
+        ls -la ${{ github.workspace }}/agedu || echo "agedu subdirectory does not exist"
+    
+    - name: List downloaded artifacts
+      run: ls -R artifacts
+
+    - name: Create Release
+      id: create_release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: agedu-${{ env.AGEDU_VERSION }}
+        name: Agedu ${{ env.AGEDU_VERSION }}
+        draft: false
+        prerelease: false
+
+    - name: Upload Release Assets
+      run: |
+        TAG_NAME=agedu-${{ env.AGEDU_VERSION }}
+
+        cd $GITHUB_WORKSPACE
+        
+        gh auth login --with-token <<< "${{ secrets.GITHUB_TOKEN }}"
+        
+        for file in artifacts/*; do
+          if [ -f "$file" ]; then
+            echo "Uploading $file"
+            gh release upload "$TAG_NAME" "$file" --clobber
+          fi
+        done
+        
+        for file in artifacts/*/*; do
+          if [ -f "$file" ]; then
+            echo "Uploading $file"
+            gh release upload "$TAG_NAME" "$file" --clobber
+          fi
+        done

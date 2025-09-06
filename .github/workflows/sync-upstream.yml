@@ -1,0 +1,108 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch: 
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://git.tartarus.org/simon/agedu.git || true
+          git config user.name "GitHub Actions"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Fetch upstream changes
+        run: git fetch upstream
+
+      - name: Get new commits from upstream
+        id: get_commits
+        run: |
+          COMMITS=$(git log HEAD..upstream/main --oneline --reverse | cut -d' ' -f1)
+          if [ -z "$COMMITS" ]; then
+            echo "has_new_commits=false" >> $GITHUB_OUTPUT
+            echo "No new commits found"
+          else
+            echo "has_new_commits=true" >> $GITHUB_OUTPUT
+            echo "Found new commits: $COMMITS"
+            COMMITS_LINE=$(echo "$COMMITS" | tr '\n' ',')
+            COMMITS_LINE=${COMMITS_LINE%,}
+            echo "COMMITS_LINE=$COMMITS_LINE"
+            echo "commits=$COMMITS_LINE" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Cherry-pick new commits
+        id: cherry
+        if: steps.get_commits.outputs.has_new_commits == 'true'
+        run: |
+          IFS=',' read -ra COMMIT_ARRAY <<< "${{ steps.get_commits.outputs.commits }}"
+          CONFLICT=false
+          CONFLICT_COMMIT=""
+          
+          for commit in "${COMMIT_ARRAY[@]}"; do
+            echo "Cherry-picking commit: $commit"
+            if git cherry-pick $commit; then
+              echo "Successfully cherry-picked $commit"
+            else
+              echo "Failed to cherry-pick $commit"
+              CONFLICT=true
+              CONFLICT_COMMIT=$commit
+
+              git add .
+              git commit -m "WIP: Cherry-pick conflict for $commit - NEEDS MANUAL RESOLUTION" --allow-empty
+              
+              break
+            fi
+          done
+          
+          if [ "$CONFLICT" = true ]; then
+            echo "conflict_commit=$CONFLICT_COMMIT" >> $GITHUB_OUTPUT
+            echo "conflict=true" >> $GITHUB_OUTPUT
+
+            BRANCH_NAME="cherry-pick-conflict-$(date +%Y%m%d-%H%M%S)"
+            git checkout -b $BRANCH_NAME
+            git push origin $BRANCH_NAME
+            echo "conflict_branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+            
+          else
+            echo "conflict=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create PR on conflict
+        if: steps.cherry.outputs.conflict == 'true'
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            try {
+              const response = await github.rest.pulls.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                head: "${{ steps.cherry.outputs.conflict_branch }}",
+                base: "main",
+                title: "Cherry-pick conflict for commit ${{ steps.cherry.outputs.conflict_commit }}",
+                body: `Cherry-pick of commit \`${{ steps.cherry.outputs.conflict_commit }}\` failed due to conflict, Please fix it.`,
+                draft: true,
+              });
+              console.log(`Created PR: ${response.data.html_url}`);
+              exit 1
+            } catch (error) {
+              console.error('Failed to create PR:', error);
+              exit 1
+            }
+
+
+      - name: Push changes to origin
+        if: steps.get_commits.outputs.has_new_commits == 'true'
+        run: git push origin HEAD:main
